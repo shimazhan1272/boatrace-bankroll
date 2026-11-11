@@ -156,9 +156,8 @@
       ${historyCard()}
       <p class="muted foot">掛け金の増額と軍資金の追加はできません。予算はルールで自動的に決まります。</p>
       <div class="foot">
-        ${state.races.length === 0
-          ? '<button class="link" data-act="discard">軍資金を入れ直す</button>'
-          : '<button class="danger block" data-act="finish">今日の運用を終了する</button>'}
+        ${state.races.length ? '<button class="danger block" data-act="finish">今日の運用を終了する</button>' : ''}
+        <button class="block" data-act="reset">入力をリセット</button>
       </div>`;
     if (hitMode) document.getElementById('payout').focus();
   }
@@ -240,9 +239,10 @@
       </section>
       ${historyCard()}
       ${locked
-        ? '<p class="muted foot">軍資金の追加はできません。次の運用は明日から始められます。</p>'
+        ? '<p class="muted foot">軍資金の追加はできません。</p>'
         : '<button class="primary block" style="margin-top:12px" data-act="new-day">新しい日を始める</button>'}
-      ${state.ended === 'auto' && state.prev ? '<div class="foot"><button class="link" data-act="undo">結果の入力ミスを訂正する</button></div>' : ''}`;
+      ${state.ended === 'auto' && state.prev ? '<div class="foot"><button class="link" data-act="undo">結果の入力ミスを訂正する</button></div>' : ''}
+      <div class="foot"><button class="block" data-act="reset">入力をリセット</button></div>`;
   }
 
   function render() {
@@ -301,9 +301,11 @@
       state = { plan: L.plan(S), balance: S, secured: 0, totalInvest: 0, totalPayout: 0, races: [], draft: newDraft(), ended: null, endDate: null, startDate: today() };
       save(); render(); window.scrollTo(0, 0);
     },
-    discard() {
-      if (!confirm('入力した軍資金を取り消して、最初の画面に戻りますか?')) return;
-      state = null; save(); render();
+    reset() {
+      if (!confirm('運用残高、確保金、履歴をすべて消して、軍資金の入力に戻ります。元に戻せません。必要な場合は先にCSVを保存してください。リセットしますか?')) return;
+      state = null;
+      hitMode = false;
+      save(); render(); window.scrollTo(0, 0);
     },
     hit() {
       hitMode = !hitMode;
@@ -336,7 +338,7 @@
       save(); render();
     },
     finish() {
-      if (!confirm('今日の運用を終了しますか?終了すると今日はもう再開できません。')) return;
+      if (!confirm('今日の運用を終了しますか?終了すると、この運用は再開できません。')) return;
       state.ended = 'manual'; state.endDate = today(); state.prev = null;
       save(); render(); window.scrollTo(0, 0);
     },
@@ -345,7 +347,9 @@
       const url = URL.createObjectURL(new Blob([buildCsv()], { type: 'text/csv;charset=utf-8' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `boatrace-${state.races[0].date || today()}.csv`;
+      const now = new Date();
+      const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map((n) => String(n).padStart(2, '0')).join('');
+      a.download = `boatrace-${today()}_${time}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
