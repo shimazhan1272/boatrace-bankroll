@@ -6,7 +6,7 @@
   const app = document.getElementById('app');
   const VENUES = ['桐生', '戸田', '江戸川', '平和島', '多摩川', '浜名湖', '蒲郡', '常滑', '津', '三国', 'びわこ', '住之江', '尼崎', '鳴門', '丸亀', '児島', '宮島', '徳山', '下関', '若松', '芦屋', '福岡', '唐津', '大村'];
 
-  let state = load();
+  let state = null;
   let hitMode = false;
 
   function load() {
@@ -15,13 +15,15 @@
       return s ? migrate(s) : null;
     } catch (e) { return null; }
   }
-  /** 買い目入力があった旧版のデータを引き継ぐ */
+  /** 旧版のデータ(買い目入力あり・日付なし)を引き継ぐ */
   function migrate(s) {
+    if (s.prev) s.prev = s.prev.pending ? null : migrate(s.prev);
     if (s.pending) {
       s.draft = { venue: s.pending.venue, r: s.pending.r, invest: String(s.pending.invest) };
       s.pending = null;
     }
-    if (s.prev) s.prev = null;
+    if (s.draft && !s.draft.date) s.draft.date = today();
+    s.races.forEach((r) => { if (!r.date) r.date = s.startDate || s.endDate || ''; });
     return s;
   }
   function save() {
@@ -49,6 +51,7 @@
 
   function newDraft(prev) {
     return {
+      date: prev && prev.date ? prev.date : today(),
       venue: prev ? prev.venue : VENUES[0],
       r: prev ? Math.min(12, Number(prev.r) + 1) : 1,
       invest: '',
@@ -123,6 +126,9 @@
       ${state.flash ? flashCard(state.flash) : ''}
       <section class="card">
         <h2>レースの結果</h2>
+        <label class="field">日付
+          <input type="date" data-draft="date" value="${esc(d.date)}" style="margin-top:4px">
+        </label>
         <div class="two">
           <label class="field">場名
             <select data-draft="venue">${VENUES.map((v) => `<option ${v === d.venue ? 'selected' : ''}>${v}</option>`).join('')}</select>
@@ -186,14 +192,30 @@
   function historyCard() {
     if (!state.races.length) return '';
     const rows = state.races.slice().reverse().map((r) => {
-      const label = `${esc(r.venue)}${esc(r.r)}R`;
+      const label = `<div class="race-date">${esc(String(r.date || '').replace(/-/g, '/'))}</div>${esc(r.venue)}${esc(r.r)}R`;
       if (r.result === 'skip') return `<tr><td>${label}<span class="tag">見送り</span></td><td>−</td><td>−</td><td>${yen(r.balanceAfter)}</td><td>${yen(r.securedAfter)}</td></tr>`;
       const tag = r.result === 'hit' ? '的中' : '不的中';
       return `<tr><td>${label}<span class="tag">${tag}</span></td><td>${yen(r.invest)}</td><td>${yen(r.payout)}</td><td>${yen(r.balanceAfter)}</td><td>${yen(r.securedAfter)}</td></tr>`;
     }).join('');
     return `<section class="card"><h2>今日の履歴</h2>
       <table class="history"><thead><tr><th>レース</th><th>投資</th><th>払戻</th><th>残高</th><th>確保</th></tr></thead><tbody>${rows}</tbody></table>
+      <button class="block" data-act="csv">CSVで保存</button>
     </section>`;
+  }
+
+  /** 履歴をExcelでも文字化けしないCSV(UTF-8 BOM付き)にする */
+  function buildCsv() {
+    const labels = { hit: '的中', miss: '不的中', skip: '見送り' };
+    const cell = (v) => {
+      const s = String(v);
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ['日付', '場名', 'レース', '結果', '投資額', '払戻金', '損益', '確保金へ移動', '運用残高', '確保金累計'];
+    const rows = state.races.map((r) => [
+      String(r.date || '').replace(/-/g, '/'), r.venue, `${r.r}R`, labels[r.result], r.invest, r.payout,
+      r.payout - r.invest, r.moved, r.balanceAfter, r.securedAfter,
+    ]);
+    return `﻿${[header, ...rows].map((row) => row.map(cell).join(',')).join('\r\n')}\r\n`;
   }
 
   /* ---------- 終了画面 ---------- */
@@ -248,7 +270,7 @@
     state.totalInvest += invest;
     state.totalPayout += payout;
     state.races.push({
-      venue: d.venue, r: d.r, result, invest, payout,
+      date: d.date || today(), venue: d.venue, r: d.r, result, invest, payout,
       moved: s.secured, balanceAfter: state.balance, securedAfter: state.secured,
     });
     const next = L.stageFor(state.plan, state.balance);
@@ -299,7 +321,7 @@
       applyResult('hit', invest, payout);
     },
     skip() {
-      state.races.push({ venue: state.draft.venue, r: state.draft.r, result: 'skip', invest: 0, payout: 0, moved: 0, balanceAfter: state.balance, securedAfter: state.secured });
+      state.races.push({ date: state.draft.date || today(), venue: state.draft.venue, r: state.draft.r, result: 'skip', invest: 0, payout: 0, moved: 0, balanceAfter: state.balance, securedAfter: state.secured });
       state.flash = { kind: 'ok', title: `${state.draft.venue} ${state.draft.r}R 見送り`, lines: ['残高は変わりません。'] };
       state.prev = null;
       state.draft = newDraft(state.draft);
@@ -319,6 +341,16 @@
       save(); render(); window.scrollTo(0, 0);
     },
     'new-day'() { state = null; save(); render(); },
+    csv() {
+      const url = URL.createObjectURL(new Blob([buildCsv()], { type: 'text/csv;charset=utf-8' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `boatrace-${state.races[0].date || today()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
   };
 
   app.addEventListener('click', (e) => {
@@ -344,5 +376,6 @@
     if (e.target.id === 'payout') actions['confirm-hit']();
   });
 
+  state = load();
   render();
 })();
